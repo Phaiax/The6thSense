@@ -46,7 +46,7 @@ bool monitorEnabledSerial = false;
 // SENSOR STUFF
 Measurement sensorData;
 
-Adafruit_BNO055 bno = Adafruit_BNO055(55);
+Adafruit_BNO055 bno = Adafruit_BNO055(BNO055_I2C_ADDRESS);
 unsigned long time;
 
 // |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
@@ -92,8 +92,8 @@ void OnSendMonitorData(CmdMessenger& cmdMessenger) {
   cmdMessenger.sendCmdArg(sensorData.gyro);
   cmdMessenger.sendCmdArg(sensorData.accel);
   cmdMessenger.sendCmdArg(sensorData.magy);
-  cmdMessenger.sendCmdArg(0.0f); // quaternions
-  cmdMessenger.sendCmdArg(0.0f);
+  cmdMessenger.sendCmdArg(sensorData.w2); // quaternions
+  cmdMessenger.sendCmdArg(sensorData.w3);
   cmdMessenger.sendCmdArg(0.0f);
   cmdMessenger.sendCmdArg(0.0f);
   cmdMessenger.sendCmdEnd();
@@ -240,8 +240,57 @@ void bluetoothLoop() {
 // |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 // SENSOR / MEASUREMENTS
 
+const uint8_t THE_ORIG_X = 0;
+const uint8_t THE_ORIG_Y = 2;
+const uint8_t THE_ORIG_Z = 4;
+const uint8_t MAP_TO_X = 0x00;
+const uint8_t MAP_TO_Y = 0x01;
+const uint8_t MAP_TO_Z = 0x02;
+
+const uint8_t WITH_X_SIGN = 2;
+const uint8_t WITH_Y_SIGN = 1;
+const uint8_t WITH_Z_SIGN = 0;
+
+const uint8_t POSITIVE = 0x00;
+const uint8_t NEGATIVE = 0x01;
+
+void bno_write8(Adafruit_BNO055::adafruit_bno055_reg_t reg, byte value) {
+  Wire.beginTransmission(BNO055_I2C_ADDRESS);
+  #if ARDUINO >= 100
+    Wire.write((uint8_t)reg);
+    Wire.write((uint8_t)value);
+  #else
+    Wire.send(reg);
+    Wire.send(value);
+  #endif
+  Wire.endTransmission();
+}
+
+uint8_t bno_read8(Adafruit_BNO055::adafruit_bno055_reg_t reg )
+{
+  uint8_t value = 0;
+  Wire.beginTransmission(BNO055_I2C_ADDRESS);
+  #if ARDUINO >= 100
+    Wire.write((uint8_t)reg);
+  #else
+    Wire.send(reg);
+  #endif
+  Wire.endTransmission();
+  Wire.requestFrom(BNO055_I2C_ADDRESS, (uint8_t)1);
+  #if ARDUINO >= 100
+    value = Wire.read();
+  #else
+    value = Wire.receive();
+  #endif
+  return value;
+}
+
 void initSensor() {
-  if (!bno.begin((Adafruit_BNO055::adafruit_bno055_opmode_t)0X09)) //Compass=0X09 //NDOF=0X0C
+  //OPERATION_MODE_COMPASS        // Compass and Fmc off need more calibration
+  //OPERATION_MODE_NDOF_FMC_OFF
+  //OPERATION_MODE_NDOF
+  Adafruit_BNO055::adafruit_bno055_opmode_t mode = Adafruit_BNO055::OPERATION_MODE_NDOF;
+  if (!bno.begin(mode))
   {
     Serial.println("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
     while (1);
@@ -250,6 +299,52 @@ void initSensor() {
   delay(1000);
 
   bno.setExtCrystalUse(true);
+
+
+//   // test known default
+//   uint8_t map_config = MAP_TO_X << THE_ORIG_X | MAP_TO_Y << THE_ORIG_Y | MAP_TO_Z << THE_ORIG_Z;
+//   uint8_t sign_config = POSITIVE << WITH_X_SIGN | POSITIVE << WITH_Y_SIGN | POSITIVE << WITH_Z_SIGN;
+
+//   if (map_config != 0x24 || sign_config != 0x00) {
+//       error(F("AXES ALGORITHM ERROR"));
+//   }
+
+//   map_config = MAP_TO_X << THE_ORIG_Y | MAP_TO_Y << THE_ORIG_Z | MAP_TO_Z << THE_ORIG_X;
+//   //sign_config = POSITIVE << WITH_X_SIGN | NEGATIVE << WITH_Y_SIGN | NEGATIVE << WITH_Z_SIGN;
+//   sign_config = NEGATIVE << WITH_X_SIGN | POSITIVE << WITH_Y_SIGN | NEGATIVE << WITH_Z_SIGN;
+
+//   // swap axes
+//   delay(30);
+//   bno.setMode(Adafruit_BNO055::OPERATION_MODE_CONFIG);
+//   // setMode waits 30ms
+//   bno_write8(Adafruit_BNO055::BNO055_AXIS_MAP_CONFIG_ADDR, map_config);
+//   delay(30);
+//   bno_write8(Adafruit_BNO055::BNO055_AXIS_MAP_SIGN_ADDR, sign_config);
+//   delay(30);
+
+//   delay(30);
+//   bno.setMode(mode);
+
+
+//   Serial.print("Read Axis conf: ");
+//   Serial.print(bno_read8(Adafruit_BNO055::BNO055_AXIS_MAP_CONFIG_ADDR), BIN);
+//   Serial.print(" set to ");
+//   Serial.println(map_config, BIN);
+//   Serial.print("Read Sign conf: ");
+//   Serial.print(bno_read8(Adafruit_BNO055::BNO055_AXIS_MAP_SIGN_ADDR), BIN);
+//   Serial.print(" set to ");
+//   Serial.println(sign_config, BIN);
+
+//   if ((bno_read8(Adafruit_BNO055::BNO055_AXIS_MAP_CONFIG_ADDR) & 0x3F) != map_config) {
+//     error(F("Could not save axis map."));
+//   }
+//   delay(30);
+//   if ((bno_read8(Adafruit_BNO055::BNO055_AXIS_MAP_SIGN_ADDR) & 0x07) != sign_config) {
+//     error(F("Could not save axis map signs."));
+//   }
+//   delay(30);
+// //  bno.setMode(mode);
+
   Serial.println("Sensor initialized.");
 }
 
@@ -264,7 +359,13 @@ void measureLoop() {
 
   sensors_event_t event;
   bno.getEvent(&event);
+  if (event.type != SENSOR_TYPE_ORIENTATION) {
+    error(F("Sensor data type wrong."));
+  }
+
   sensorData.winkel = event.orientation.x;
+  sensorData.w2 = event.orientation.y;
+  sensorData.w3 = event.orientation.z;
 
   bno.getCalibration(&sensorData.system, &sensorData.gyro, &sensorData.accel, &sensorData.magy);
 }

@@ -16,4 +16,6 @@ const uint8_t BACK = 5;
 const uint8_t LEFT = 6;
 
 #define BNO055_SAMPLERATE_DELAY_MS (10)
-#define MONITOR_DELAY (250);
+#define MONITOR_DELAY (250)
+
+#define BNO055_I2C_ADDRESS (55)

@@ -35,6 +35,7 @@ enum e_status
 struct Measurement {
     uint8_t system, gyro, accel, magy;
     float winkel;
+    float w2, w3;
 };
 
 inline void bt_set_vibration_active(bool enable)
