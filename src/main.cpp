@@ -22,14 +22,14 @@ enum
   // Commands
   kAcknowledge = 0       , // Command to acknowledge that cmd was received
   kError = 1              , // Command to report errors
-  kLed = 2,
-  kShowCalib = 3,
-  kShowCalibResult = 30,
-  kSetVibrationEnable = 4,
-  kSetMaxIntensity = 5,
-  kSetThresholdForVibrate = 6,
-  kSetVibrationLoopTime = 7,
-  kLlSetVibration = 8,
+  kLed = 2,                     // 2,0,1,0,0; // 0 or 1
+  kMonitorEnable = 3,           // 3,1; // 0 or 1
+  kMonitorResult = 30,          // 30,winkel:float,system:int,gyro:int,accel:int,mag:int;
+  kSetVibrationEnable = 4,      // 4,1; // 0 or 1
+  kSetMaxIntensity = 5,         // 5,152; // max: 255
+  kSetThresholdForVibrate = 6,  // 6,0.63; // max: 1.0
+  kSetVibrationLoopTime = 7,    // 7,20; // in millis
+  kLlSetVibration = 8,          // 8,152,0,0,12; // max each: 255
 };
 
 CmdMessenger cmdMessengerBLE = CmdMessenger(Serial); // serial only for init
@@ -38,6 +38,9 @@ Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_
 
 bool waitForBleConnection = false;
 bool bleConnected = false;
+
+bool monitorEnabledBLE = false;
+bool monitorEnabledSerial = false;
 
 // |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 // SENSOR STUFF
@@ -82,20 +85,40 @@ void OnLedCommand(CmdMessenger& cmdMessenger)
   digitalWrite(LED_LEFT, bool2level(cmdMessenger.readBoolArg()));
 }
 
-void OnShowCalib(CmdMessenger& cmdMessenger) {
-  cmdMessenger.sendCmdStart((uint8_t) kShowCalibResult);
+void OnSendMonitorData(CmdMessenger& cmdMessenger) {
+  cmdMessenger.sendCmdStart((uint8_t) kMonitorResult);
   cmdMessenger.sendCmdArg(sensorData.winkel);
   cmdMessenger.sendCmdArg(sensorData.system);
   cmdMessenger.sendCmdArg(sensorData.gyro);
   cmdMessenger.sendCmdArg(sensorData.accel);
   cmdMessenger.sendCmdArg(sensorData.magy);
+  cmdMessenger.sendCmdArg(0.0f); // quaternions
+  cmdMessenger.sendCmdArg(0.0f);
+  cmdMessenger.sendCmdArg(0.0f);
+  cmdMessenger.sendCmdArg(0.0f);
   cmdMessenger.sendCmdEnd();
 }
+
+unsigned long next_monitor_time = 0;
+void monitorLoop() {
+  if (next_monitor_time > time) {
+    return;
+  }
+  next_monitor_time = time + MONITOR_DELAY;
+
+  if (monitorEnabledSerial) {
+    OnSendMonitorData(cmdMessengerSerial);
+  }
+  if (monitorEnabledBLE) {
+    OnSendMonitorData(cmdMessengerBLE);
+  }
+}
+
 void OnSetVibrationEnable(CmdMessenger& cmdMessenger) {
   bt_set_vibration_active(cmdMessenger.readBoolArg());
 }
 void OnSetMaxIntensity(CmdMessenger& cmdMessenger) {
-  bt_set_maxintensity(cmdMessenger.readInt32Arg());
+  bt_set_maxintensity(cmdMessenger.readInt16Arg());
 }
 void OnSetThresholdForVibrate(CmdMessenger& cmdMessenger) {
   bt_set_treshhold_forVibrate(cmdMessenger.readFloatArg());
@@ -112,8 +135,8 @@ void OnLlSetVibration(CmdMessenger& cmdMessenger) {
 
 void OnLedCommandBLE() { OnLedCommand(cmdMessengerBLE); }
 void OnLedCommandSerial() { OnLedCommand(cmdMessengerSerial); }
-void OnShowCalibBLE() { OnShowCalib(cmdMessengerBLE); }
-void OnShowCalibSerial() { OnShowCalib(cmdMessengerSerial); }
+void OnMonitorEnableBLE() { monitorEnabledBLE = cmdMessengerBLE.readBoolArg(); }
+void OnMonitorEnableSerial() { monitorEnabledSerial = cmdMessengerSerial.readBoolArg(); }
 void OnSetVibrationEnableBLE() { OnSetVibrationEnable(cmdMessengerBLE); }
 void OnSetVibrationEnableSerial() { OnSetVibrationEnable(cmdMessengerSerial); }
 void OnSetMaxIntensityBLE() { OnSetMaxIntensity(cmdMessengerBLE); }
@@ -130,7 +153,7 @@ void attachCommandCallbacksBLE()
   // Attach callback methods
   cmdMessengerBLE.attach(OnUnknownCommandBLE);
   cmdMessengerBLE.attach(kLed, OnLedCommandBLE);
-  cmdMessengerBLE.attach(kShowCalib, OnShowCalibBLE);
+  cmdMessengerBLE.attach(kMonitorEnable, OnMonitorEnableBLE);
   cmdMessengerBLE.attach(kSetVibrationEnable, OnSetVibrationEnableBLE);
   cmdMessengerBLE.attach(kSetMaxIntensity, OnSetMaxIntensityBLE);
   cmdMessengerBLE.attach(kSetThresholdForVibrate, OnSetThresholdForVibrateBLE);
@@ -143,7 +166,7 @@ void attachCommandCallbacksSerial()
   // Attach callback methods
   cmdMessengerSerial.attach(OnUnknownCommandSerial);
   cmdMessengerSerial.attach(kLed, OnLedCommandSerial);
-  cmdMessengerSerial.attach(kShowCalib, OnShowCalibSerial);
+  cmdMessengerSerial.attach(kMonitorEnable, OnMonitorEnableSerial);
   cmdMessengerSerial.attach(kSetVibrationEnable, OnSetVibrationEnableSerial);
   cmdMessengerSerial.attach(kSetMaxIntensity, OnSetMaxIntensitySerial);
   cmdMessengerSerial.attach(kSetThresholdForVibrate, OnSetThresholdForVibrateSerial);
@@ -198,11 +221,11 @@ void bluetoothLoop() {
   }
 
   if (bleConnected) {
-    size_t bytesAvailable = min(ble.available(), 64);
-    if (bytesAvailable > 0) {
-      Serial.print("A:");
-      Serial.println(bytesAvailable);
-    }
+    // size_t bytesAvailable = min(ble.available(), 64);
+    // if (bytesAvailable > 0) {
+    //   Serial.print("A:");
+    //   Serial.println(bytesAvailable);
+    // }
     cmdMessengerBLE.feedinSerialData();
   }
 
@@ -245,26 +268,6 @@ void measureLoop() {
 
   bno.getCalibration(&sensorData.system, &sensorData.gyro, &sensorData.accel, &sensorData.magy);
 }
-
-int show_calibration(bool print_it)
-{
-  uint8_t system, gyro, accel, magy;
-  system = gyro = accel = magy = 0;
-  bno.getCalibration(&system, &gyro, &accel, &magy);
-
-  if (print_it && debug_out)
-  {
-    Serial.print("\tCalibration: G:");
-    Serial.print(gyro, DEC);
-    Serial.print(" A:");
-    Serial.print(accel, DEC);
-    Serial.print(" M:");
-    Serial.print(magy, DEC);
-    Serial.print("");
-  }
-  return gyro + accel + magy;
-}
-
 
 // |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
 // SWITCH
@@ -324,4 +327,6 @@ void loop()
 
   bluetoothLoop();
   cmdMessengerSerial.feedinSerialData();
+
+  monitorLoop();
 }

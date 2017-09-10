@@ -47,10 +47,16 @@ inline void bt_vibration_active_toggle()
 }
 inline void bt_set_maxintensity(int tomax255)
 {
+  if (tomax255 > 255) {
+    tomax255 = 0;
+  }
   MAXINTENSITY = tomax255;
 }
 inline void bt_set_treshhold_forVibrate(float tomax1)
 {
+  if (tomax1 > 1.0) {
+    tomax1 = 0;
+  }
   treshhold_forVibrate = tomax1;
 }
 inline void bt_set_realbigdelay(int one_sec_is1k)
